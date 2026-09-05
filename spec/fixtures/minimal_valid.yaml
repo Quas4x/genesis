@@ -1,0 +1,17 @@
+openapi: 3.0.3
+info:
+  title: Minimal Test API
+  version: 1.0.0
+paths:
+  /payouts:
+    post:
+      summary: Create payout
+  /payouts/{id}:
+    get:
+      summary: Get payout status
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key

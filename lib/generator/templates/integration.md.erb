@@ -1,0 +1,36 @@
+# <%= model.provider_name.capitalize %> Integration Guide
+
+## Авторизация
+- Тип: <%= model.auth[:scheme_name] %>
+- Header: `<%= model.auth[:header_name] %>: <credentials.api_key>`
+- Хранение: `providers.credentials` (encrypted)
+
+## Методы
+| Метод | Endpoint | Назначение | Idempotency |
+|-------|----------|------------|-------------|
+| create_payout | POST /payouts | Создание выплаты | Idempotency-Key header |
+| get_status | GET /payouts/{id} | Статус | - |
+| cancel | POST /payouts/{id}/cancel | Отмена | - |
+| webhook | POST /webhooks/payout | Callback | <%= model.webhook[:signature_header] %> |
+
+## Маппинг статусов
+| Provider | Space Payments |
+|----------|----------------|
+<% model.status_map.each do |prov_st, int_st| -%>
+| <%= prov_st %> | <%= int_st %> |
+<% end -%>
+
+## Обработка ошибок
+| HTTP | Provider code | Действие |
+|------|---------------|----------|
+| 400 | validation_error | reject |
+| 401 | unauthorized | alert ops, block provider |
+| 402 | insufficient_balance | retry later |
+| 429 | rate_limit_exceeded | retry with backoff |
+| 500 | internal_error | retry, alert ops |
+
+## ProviderGateway config
+{ "external_method": "sbp_payout", "gateway": "RUB_SBP_WITHDRAW" }
+
+## Webhook signature
+<%= model.webhook[:signature_type] %>(body, callback_secret) → hex → <%= model.webhook[:signature_header] %>
