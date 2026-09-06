@@ -24,7 +24,7 @@ docker build -t genesis-generator .
 docker run --rm -v $(pwd)/output:/app/output genesis-generator ./bin/integrate --spec spec/fixtures/provider_api.yaml --provider novapay
 ```
 
-### Вариант 2: Локальный запуск:**
+### Вариант 2: Локальный запуск:
 **Требования: Ruby 3.3+, Bundler**
 ```bash
 bundle install
