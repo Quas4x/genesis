@@ -35,7 +35,13 @@ module Generator
     def class_name
       words = @raw_name.split(/[^a-zA-Z0-9]+/).reject(&:empty?)
       camel = words.map(&:capitalize).join
+      
+      # Если имя пустое — ставим дефолтное
       camel = 'CustomProvider' if camel.empty?
+      
+      # Если имя начинается с цифры, добавляем префикс (например, Api20200914Service)
+      camel = "Api#{camel}" if camel.match?(/^\d/)
+      
       "#{camel}Service"
     end
 

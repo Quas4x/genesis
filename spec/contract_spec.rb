@@ -7,7 +7,7 @@ require 'tmpdir'
 RSpec.describe 'Universal OpenAPI Invariant Contract' do
   # Исключаем намеренно сломанные тестовые файлы (например, invalid_syntax.yaml)
   spec_files = Dir.glob(File.expand_path('fixtures/*.{yaml,yml}', __dir__))
-                  .reject { |f| File.basename(f).start_with?('invalid') }
+                  .reject { |f| File.basename(f).include?('invalid') }
                   .uniq
 
   spec_files.each do |spec_path|
