@@ -1,5 +1,4 @@
 # frozen_string_literal: true
-# frozen_string_literal: true
 
 require 'date'
 require 'yaml'
@@ -7,6 +6,7 @@ require 'optparse'
 
 require_relative 'generator/errors'
 require_relative 'generator/ref_resolver'
+require_relative 'generator/schema_synthesizer'
 require_relative 'generator/parser'
 require_relative 'generator/model'
 require_relative 'generator/writer'

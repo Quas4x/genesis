@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require 'openssl'
+require 'json'
+
 # app/services/provider/<%= model.provider_name %>_service.rb
 class Provider
   class <%= model.class_name %> < BaseService
@@ -7,7 +10,12 @@ class Provider
 
     def create_request(operation, request_method = 'create')
       payload = build_payout_payload(operation)
-      response = client.post("#{BASE_URL}/payouts", json: payload, headers: auth_headers)
+      headers = auth_headers
+<%- if model.idempotency_header -%>
+      headers['<%= model.idempotency_header %>'] = operation.id
+<%- end -%>
+
+      response = client.post("#{BASE_URL}<%= model.create_path %>", json: payload, headers: headers)
       parse_create_response(operation, response)
     rescue Provider::RateLimitError
       failure(:too_many_requests, 'provider.rate_limit')
@@ -16,12 +24,13 @@ class Provider
     end
 
     def fetch_status(operation)
-      response = client.get("#{BASE_URL}/payouts/#{operation.provider_operation_id}")
-      map_status(response.body['status'])
+      path = "#{BASE_URL}<%= model.status_path_template.sub(/\{[^}]+\}/, '#{operation.provider_operation_id}') %>"
+      response = client.get(path, headers: auth_headers)
+      map_status(response.body&.dig('status') || 'failed')
     end
 
-    def process_callback(payload)
-      verify_signature!(payload) # <%= model.webhook[:signature_type] %> из <%= model.webhook[:signature_header] %>
+    def process_callback(payload, signature_header = nil)
+      verify_signature!(payload, signature_header)
       case payload['event']
       when 'payout.completed' then approve_operation(payload['payout_id'])
       when 'payout.failed'    then reject_operation(payload['payout_id'], payload.dig('error', 'code'))
@@ -38,6 +47,28 @@ class Provider
     end
 
     private
+
+    def auth_headers
+      <%= model.auth_headers_expression %>
+    end
+
+    def verify_signature!(payload, signature_header)
+      secret = credentials.callback_secret
+      return unless secret
+
+      body_to_sign = payload.is_a?(String) ? payload : payload.to_json
+      expected_sig = OpenSSL::HMAC.hexdigest('SHA256', secret, body_to_sign)
+
+      unless secure_compare(expected_sig, signature_header)
+        raise Provider::SignatureVerificationError, 'Invalid webhook signature'
+      end
+    end
+
+    def secure_compare(a, b)
+      return false if a.nil? || b.nil? || a.bytesize != b.bytesize
+
+      OpenSSL.fixed_length_secure_compare(a, b)
+    end
 
     def build_payout_payload(operation)
       {

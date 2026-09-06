@@ -1,0 +1,123 @@
+openapi: 3.0.3
+info:
+  title: PayCore Global Transfers API
+  version: 2.4.0
+  description: Международный шлюз выплат и трансферов
+servers:
+  - url: https://sandbox.paycore.io/api
+    description: Sandbox Environment
+components:
+  securitySchemes:
+    BearerToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    TransferRequest:
+      type: object
+      required:
+        - amount_cents
+        - destination
+      properties:
+        amount_cents:
+          type: integer
+          minimum: 50000
+          description: Сумма в минимальных единицах валюты
+        currency:
+          type: string
+          enum: [RUB, USD, EUR]
+        destination:
+          type: string
+          description: Идентификатор получателя
+        metadata:
+          type: object
+          properties:
+            order_id:
+              type: string
+    TransferResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [processing, success, declined]
+        created_at:
+          type: string
+          format: date-time
+paths:
+  /v1/transfers:
+    post:
+      operationId: initiateTransfer
+      summary: Создать распоряжение на выплату
+      security:
+        - BearerToken: []
+      parameters:
+        - name: X-Request-Id
+          in: header
+          required: false
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferRequest'
+      responses:
+        '201':
+          description: Трансфер принят
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferResponse'
+        '401':
+          description: Не авторизован
+        '422':
+          description: Ошибка бизнес-логики
+
+  /v1/transfers/{transfer_id}:
+    get:
+      operationId: getTransferStatus
+      summary: Запросить статус выплаты
+      security:
+        - BearerToken: []
+      parameters:
+        - name: transfer_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Статус операции
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferResponse'
+
+  /v1/events/webhook:
+    post:
+      summary: Уведомление о переводе
+      parameters:
+        - name: X-Signature-SHA256
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                event:
+                  type: string
+                status:
+                  type: string
+                  enum: [success, declined]
+      responses:
+        '200':
+          description: Обработано

@@ -3,7 +3,11 @@
 require 'spec_helper'
 
 RSpec.describe Generator::Parser do
-  let(:spec_path) { File.expand_path('../provider_api.yaml', __dir__) }
+  let(:spec_path) do
+    [
+      File.expand_path('fixtures/provider_api.yaml', __dir__)
+    ].find { |path| File.exist?(path) }
+  end
   let(:spec_hash) { YAML.safe_load_file(spec_path, permitted_classes: [Date, Time], aliases: true) }
   subject(:parser) { described_class.new(spec_hash) }
 

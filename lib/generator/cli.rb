@@ -1,48 +1,50 @@
 # lib/generator/cli.rb
 # frozen_string_literal: true
 
+require 'optparse'
+require 'yaml'
+
 module Generator
   class CLI
-    REQUIRED_OPTIONS = %i[spec provider lang].freeze
-
     def self.run(argv)
-      new(argv).execute
+      new(argv).run
     end
 
     def initialize(argv)
       @argv = argv
-      @options = {}
+      @options = {
+        lang: 'ruby',
+        output: 'output'
+      }
     end
 
-    def execute
+    def run
       parse_options!
       validate_options!
-      validate_file_existence!
 
-      spec_content = load_yaml_spec!
-      parser = Generator::Parser.new(spec_content)
+      spec_hash = load_spec(@options[:spec])
+      parser = Parser.new(spec_hash)
       parser.validate!
 
       output_summary(parser)
 
-      model = Generator::Model.new(@options[:provider], parser)
-      writer = Generator::Writer.new(model, output_dir: 'output')
+      model = Model.new(@options[:provider], parser)
+      writer = Writer.new(model, output_dir: @options[:output])
 
       puts 'Generating service...'
-      writer.render_service
-
       puts 'Generating integration guide...'
-      writer.render_guide
-
       puts 'Generating test fixtures...'
-      writer.render_fixtures
+      generated_files = writer.generate_all!
 
       puts 'Output:'
-      puts "  ./output/#{@options[:provider]}_service.rb"
-      puts '  ./output/INTEGRATION.md'
-      puts '  ./output/fixtures.json'
-
+      generated_files.each { |f| puts "  #{f}" }
       0
+    rescue OptionParser::ParseError => e
+      warn "Error: #{e.message}"
+      1
+    rescue Psych::SyntaxError => e
+      warn "Error: Failed to parse YAML file: #{e.message}"
+      1
     rescue Generator::Error => e
       warn "Error: #{e.message}"
       1
@@ -55,18 +57,27 @@ module Generator
 
     def parse_options!
       parser = OptionParser.new do |opts|
-        opts.banner = 'Usage: ./integrate [options]'
+        opts.banner = 'Usage: integrate --spec <path> --provider <name> [--lang <ruby>] [--output <dir>]'
 
-        opts.on('--spec FILE', 'Path to OpenAPI spec file (YAML)') do |value|
-          @options[:spec] = value
+        opts.on('-s', '--spec PATH', 'Path to OpenAPI specification') do |v|
+          @options[:spec] = v
         end
 
-        opts.on('--provider NAME', 'Provider name (e.g., novapay)') do |value|
-          @options[:provider] = value
+        opts.on('-p', '--provider NAME', 'Provider name') do |v|
+          @options[:provider] = v
         end
 
-        opts.on('--lang LANGUAGE', 'Target language (e.g., ruby)') do |value|
-          @options[:lang] = value
+        opts.on('-l', '--lang LANG', 'Target language (default: ruby)') do |v|
+          @options[:lang] = v
+        end
+
+        opts.on('-o', '--output DIR', 'Output directory (default: output)') do |v|
+          @options[:output] = v
+        end
+
+        opts.on('-h', '--help', 'Show this help message') do
+          puts opts
+          exit 0
         end
       end
 
@@ -74,25 +85,13 @@ module Generator
     end
 
     def validate_options!
-      missing = REQUIRED_OPTIONS.reject { |opt| @options[opt] && !@options[opt].strip.empty? }
-      return if missing.empty?
-
-      raise Generator::MissingArgumentError,
-            "Missing required options: #{missing.map { |m| "--#{m}" }.join(', ')}. " \
-            'Example: ./integrate --spec provider_api.yaml --provider novapay --lang ruby'
+      raise Generator::ValidationError, 'Missing required argument: --spec' unless @options[:spec]
+      raise Generator::ValidationError, 'Missing required argument: --provider' unless @options[:provider]
+      raise Generator::ValidationError, "Spec file not found: #{@options[:spec]}" unless File.exist?(@options[:spec])
     end
 
-    def validate_file_existence!
-      path = @options[:spec]
-      return if File.exist?(path)
-
-      raise Generator::SpecFileNotFoundError, "Specification file not found at path: #{path}"
-    end
-
-    def load_yaml_spec!
-      YAML.safe_load_file(@options[:spec], permitted_classes: [Date, Time], aliases: true)
-    rescue Psych::SyntaxError => e
-      raise Generator::InvalidYamlError, "Failed to parse YAML file: #{e.message}"
+    def load_spec(path)
+      YAML.safe_load_file(path, permitted_classes: [Date, Time], aliases: true)
     end
 
     def output_summary(parser)
@@ -101,6 +100,11 @@ module Generator
       puts "Found #{endpoints.size} endpoints: #{endpoints.join(', ')}"
       puts "Auth: #{parser.auth_summary}"
       puts "Webhook signature: #{parser.webhook_summary}"
+
+      if parser.warnings.any?
+        puts 'Warnings:'
+        parser.warnings.each { |warning| puts "  - [WARN] #{warning}" }
+      end
     end
   end
 end

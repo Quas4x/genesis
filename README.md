@@ -1,74 +1,38 @@
-# genesis
-# 🚀 Space Payments: OpenAPI Integration Generator
+# OpenAPI Payouts Generator
 
-**Hack.Genesis 2026 | Трек: API Integration Generator (Ruby)**  
-**Команда:** c0d3R5 | Вячеслав Нестеров
+Генератор интеграций для Space Payments. Автоматически анализирует OpenAPI/Swagger спецификации платежных шлюзов (Adyen, Stripe, ЮKassa и др.) и синтезирует готовые к продакшену Ruby-сервисы.
 
-Консольная утилита для автоматизации подключения новых платежных шлюзов к платформе Space Payments. Инструмент парсит спецификации OpenAPI 3.x, нормализует данные и генерирует готовый к бою Ruby-код, документацию и тестовые фикстуры, сокращая время интеграции нового провайдера с нескольких дней до считанных минут.
-
----
-
-## Бизнес-задача и Решение
-
+## Архитектура и Решение
 Вместо хардкода под конкретный YAML, реализован **универсальный 3-этапный конвейер (Pipeline)**:
 
-1. **Parser & RefResolver:** Читает спецификацию и рекурсивно разрешает внутренние ссылки (`$ref`). Извлекает механизмы авторизации, пути эндпоинтов, лимиты сумм и параметры вебхуков.
-2. **Intermediate Representation (IR Model):** Изолирует парсер от генератора. Нормализует внешние статусы (например, `pending` → `in_progress`), маппит HTTP-коды в системные ошибки Space Payments и переводит суммы (копейки → рубли).
-3. **Template Engine (ERB):** На основе IR-модели генерирует строго типизированные артефакты, соответствующие внутренним контрактам платформы.
+1. **Heuristic Parser & RefResolver:** Анализирует спецификацию, рекурсивно разрешает `$ref` (с защитой от циклов) и с помощью эвристик находит эндпоинты выплат, статусов и вебхуков, даже если их пути нестандартны.
+2. **Intermediate Representation (IR Model):** Изолирует парсер от генератора. Нормализует внешние статусы (`pending` → `in_progress`), маппит HTTP-коды в системные ошибки и переводит суммы (копейки → рубли).
+3. **Template Engine (ERB):** Генерирует строго типизированные артефакты (код, моки, документацию), соответствующие внутренним контрактам платформы.
 
 ## Инженерные особенности
-* **Zero Heavy Dependencies:** Разрешение `$ref` и анализ OpenAPI написаны с нуля без использования тяжеловесных сторонних гемов. Только стандартная библиотека (`yaml`, `erb`, `optparse`).
-* **Test-Driven Development (TDD):** Спроектировано через тесты. 100% стабильность работы CLI и парсера покрыта RSpec (включая краш-тесты битого синтаксиса).
-* **Соблюдение контракта:** Сгенерированный код полностью наследует логику `Provider::BaseService` и включает методы `create_request`, `fetch_status`, `process_callback` и `check_conditions`.
-
----
+* **Zero Heavy Dependencies:** Разрешение `$ref` и анализ написаны с нуля без тяжеловесных гемов. Только стандартная библиотека (`yaml`, `erb`, `optparse`, `openssl`).
+* **Smart Heuristics & Graceful Degradation:** Генератор не падает при отсутствии полей. Применяет безопасные дефолты и выводит систему CLI-предупреждений. Успешно парсит гигантские схемы (Stripe, Adyen) без переполнения стека.
+* **Mock Synthesizer:** Автоматически синтезирует валидные тестовые `fixtures.json` на основе типов данных из JSON Schema, если секция `examples` отсутствует.
+* **Contract-Driven Testing:** 100% стабильность работы покрыта RSpec (72+ инвариантных теста). Сгенерированный код валидируется встроенным компилятором `RubyVM` на лету.
+* **Боевая безопасность:** Сгенерированные сервисы "из коробки" поддерживают HMAC-SHA256 верификацию вебхуков и безопасное сравнение строк (constant-time compare).
 
 ## Установка и запуск
 
-**Требования:**
-* Ruby 3.3+
-* Bundler
-
-**1. Клонирование и установка зависимостей**
+### Вариант 1: Docker (Рекомендуемый)
 ```bash
-git clone <репозиторий>
-cd genesis
+docker build -t genesis-generator .
+docker run --rm -v $(pwd)/output:/app/output genesis-generator ./bin/integrate --spec spec/fixtures/provider_api.yaml --provider novapay
+```
+
+### Вариант 2: Локальный запуск:**
+**Требования: Ruby 3.3+, Bundler**
+```bash
 bundle install
+./bin/integrate --spec spec/fixtures/provider_api.yaml --provider custom_pay
 ```
+---
 
-**2. Использование**
-```bash
-./bin/integrate --spec "yaml файл провайдера" --provider "название провайдера" --lang "язык"
-```
-Например: 
-```bash
-./bin/integrate --spec provider_api.yaml --provider novapay --lang ruby
-```
-
-**3. На выходе**
-```bash
-Parsing spec...
-Found 5 endpoints: POST /payouts, GET /payouts/{payout_id}, POST /payouts/{payout_id}/cancel, POST /webhooks/payout, GET /balance
-Auth: ApiKeyAuth (header: X-API-Key)
-Webhook signature: X-NovaPay-Signature (HMAC-SHA256)
-Generating service...
-Generating integration guide...
-Generating test fixtures...
-Output:
-  ./output/novapay_service.rb
-  ./output/INTEGRATION.md
-  ./output/fixtures.json
-```
-
-## *Проект покрыт модульными тестами с использованием RSpec. Для прогона всего набора выполните:
+## *Проект использует RSpec для инвариантного тестирования спецификаций. Базово включает прогоны на реальных конфигах (Stripe, Adyen, ЮKassa, Klarna), также можно расширить базу, добавив конфиги в spec/fixtures. Для прогона всего набора выполните:
 ```bash
 bundle exec rspec
 ```
-
-## В ближайших итерациях планируется:
-
-Внедрение эвристического поиска эндпоинтов (распознавание методов создания выплаты без жесткой привязки к пути /payouts).
-
-Расширение поддержки схем авторизации (Bearer/JWT, Basic Auth).
-
-Динамическая генерация данных для fixtures.json на основе типов данных из схемы properties, если секция examples отсутствует в спецификации.

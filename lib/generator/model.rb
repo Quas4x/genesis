@@ -1,3 +1,4 @@
+# lib/generator/model.rb
 # frozen_string_literal: true
 
 module Generator
@@ -24,16 +25,37 @@ module Generator
     attr_reader :provider_name, :parser
 
     def initialize(provider_name, parser)
-      @provider_name = provider_name.to_s.downcase
+      @raw_name = provider_name.to_s
+      @provider_name = sanitize_snake_case(@raw_name)
       @parser = parser
     end
 
+    # Превращает любые строки ("Stripe API-swagger", "gov.uk") в валидный CamelCase класс Ruby:
+    # "StripeApiSwaggerService", "GovUkPayApiSwaggerService"
     def class_name
-      "#{@provider_name.capitalize}Service"
+      words = @raw_name.split(/[^a-zA-Z0-9]+/).reject(&:empty?)
+      camel = words.map(&:capitalize).join
+      camel = 'CustomProvider' if camel.empty?
+      "#{camel}Service"
     end
 
     def env_base_url_key
-      "#{@provider_name.upcase}_BASE_URL"
+      words = @raw_name.split(/[^a-zA-Z0-9]+/).reject(&:empty?)
+      key = words.map(&:upcase).join('_')
+      key = 'PROVIDER' if key.empty?
+      "#{key}_BASE_URL"
+    end
+
+    def create_path
+      @parser.create_payout_operation&.dig(:path) || '/payouts'
+    end
+
+    def status_path_template
+      @parser.fetch_status_operation&.dig(:path) || '/payouts/{id}'
+    end
+
+    def idempotency_header
+      @parser.create_payout_operation&.dig(:idempotency_header)
     end
 
     def base_url
@@ -43,12 +65,28 @@ module Generator
     end
 
     def auth
-      @parser.auth_details || { header_name: 'X-API-Key', scheme_name: 'ApiKeyAuth' }
+      @parser.auth_details || { header_name: 'X-API-Key', scheme_name: 'ApiKeyAuth', type: 'apiKey' }
+    end
+
+    def auth_headers_expression
+      case auth[:type]
+      when 'http'
+        if auth[:scheme] == 'basic'
+          "{ 'Authorization' => \"Basic \#{credentials.api_key}\" }"
+        else
+          "{ 'Authorization' => \"Bearer \#{credentials.token}\" }"
+        end
+      else
+        header = auth[:header_name] || 'X-API-Key'
+        "{ '#{header}' => credentials.api_key }"
+      end
     end
 
     def min_amount_rub
       payout_op = @parser.create_payout_operation
-      raw_min = payout_op&.dig(:min_amount) || 100_000
+      raw_min = payout_op&.dig(:min_amount)
+      return 0 unless raw_min
+
       raw_min / 100
     end
 
@@ -83,44 +121,59 @@ module Generator
 
     def fixtures_data
       payout_op = @parser.create_payout_operation || {}
-      payout_example = payout_op.dig(:examples, 'sbp_payout', 'value') || {
-        amount: 1_500_000,
-        currency: 'RUB',
-        external_id: 'op_abc123',
-        recipient: { type: 'sbp', phone: '79001234567', bank_code: '044525225' }
-      }
+      payout_req_example = extract_example(payout_op[:examples]) ||
+                           SchemaSynthesizer.generate(payout_op[:request_schema])
+
+      status_op = @parser.fetch_status_operation || {}
+      status_schema = status_op.dig(:responses, '200', 'content', 'application/json', 'schema')
+      status_example = extract_example(status_op.dig(:responses, '200', 'content', 'application/json', 'examples')) ||
+                       SchemaSynthesizer.generate(status_schema)
 
       wh = @parser.webhook_details || {}
-      wh_completed = wh.dig(:examples, 'completed', 'value') || {
-        event: 'payout.completed',
-        payout_id: 'np_7f3a9b2c',
-        status: 'completed'
-      }
-      wh_failed = wh.dig(:examples, 'failed', 'value') || {
-        event: 'payout.failed',
-        payout_id: 'np_7f3a9b2c',
-        status: 'failed',
-        error: { code: 'recipient_not_found' }
-      }
+      wh_example = extract_example(wh[:examples]) ||
+                   SchemaSynthesizer.generate(wh[:payload_schema])
+
+      callback_success = wh_example.is_a?(Hash) ? wh_example.dup : { 'status' => 'completed' }
+      callback_success['status'] = 'completed' if callback_success.key?('status')
+      callback_success['event'] = 'payout.completed' if callback_success.key?('event')
+
+      callback_failed = wh_example.is_a?(Hash) ? wh_example.dup : { 'status' => 'failed' }
+      callback_failed['status'] = 'failed' if callback_failed.key?('status')
+      callback_failed['event'] = 'payout.failed' if callback_failed.key?('event')
+      callback_failed['error'] = { 'code' => 'rejected_by_bank', 'message' => 'Operation declined' }
 
       {
         create_request: {
-          request: payout_example,
-          response_201: { id: 'np_7f3a9b2c', status: 'pending' },
-          response_422: { error: { code: 'validation_error', message: 'Amount must be at least 100000 kopecks' } }
+          request: payout_req_example,
+          response_201: { id: 'sample_id_123', status: 'pending' },
+          response_422: { error: { code: 'validation_error', message: 'Validation failed' } }
         },
         fetch_status: {
-          response_200: { id: 'np_7f3a9b2c', status: 'completed' }
+          response_200: status_example || { id: 'sample_id_123', status: 'completed' }
         },
         callback: {
-          payload: wh_completed,
-          expected_operation_status: status_map[wh_completed['status']] || 'approved'
+          payload: callback_success,
+          expected_operation_status: status_map[callback_success['status']] || 'approved'
         },
         callback_failed: {
-          payload: wh_failed,
-          expected_operation_status: status_map[wh_failed['status']] || 'rejected'
+          payload: callback_failed,
+          expected_operation_status: status_map[callback_failed['status']] || 'rejected'
         }
       }
+    end
+
+    private
+
+    def sanitize_snake_case(str)
+      words = str.split(/[^a-zA-Z0-9]+/).reject(&:empty?)
+      words.map(&:downcase).join('_')
+    end
+
+    def extract_example(examples_node)
+      return nil unless examples_node.is_a?(Hash) && !examples_node.empty?
+
+      first_entry = examples_node.values.first
+      first_entry.is_a?(Hash) && first_entry.key?('value') ? first_entry['value'] : first_entry
     end
   end
 end
